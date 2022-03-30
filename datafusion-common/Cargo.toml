@@ -45,4 +45,4 @@ ordered-float = "2.10"
 parquet = { version = "10.0", features = ["arrow"], optional = true }
 pyo3 = { version = "0.16", optional = true }
 #sqlparser = "0.15"
-sqlparser = {git = "https://github.com/piedb-dev/sqlparser-rs.git", rev = "e745dc1"}
+sqlparser = {git = "https://github.com/piedb-dev/sqlparser-rs.git", rev = "75d3409"}
