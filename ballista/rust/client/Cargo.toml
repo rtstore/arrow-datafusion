@@ -36,7 +36,7 @@ futures = "0.3"
 log = "0.4"
 parking_lot = "0.12"
 #sqlparser = "0.15"
-sqlparser = {git = "https://github.com/piedb-dev/sqlparser-rs.git", rev = "75d3409"}
+sqlparser = {git = "https://github.com/piedb-dev/sqlparser-rs.git", rev = "0cc864d"}
 tempfile = "3"
 tokio = "1.0"
 
