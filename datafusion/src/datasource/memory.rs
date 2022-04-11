@@ -196,7 +196,6 @@ mod tests {
             Field::new("b", DataType::Int32, false),
             Field::new("c", DataType::Int32, false),
         ]));
-
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
@@ -205,15 +204,12 @@ mod tests {
                 Arc::new(Int32Array::from_slice(&[7, 8, 9])),
             ],
         )?;
-
         let provider = MemTable::try_new(schema, vec![vec![batch]])?;
-
         let exec = provider.scan(&None, &[], None).await?;
         let mut it = exec.execute(0, task_ctx).await?;
         let batch1 = it.next().await.unwrap()?;
         assert_eq!(3, batch1.schema().fields().len());
         assert_eq!(3, batch1.num_columns());
-
         Ok(())
     }
 
