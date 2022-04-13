@@ -570,21 +570,12 @@ impl SessionContext {
         catalog: Arc<dyn CatalogProvider>,
     ) -> Option<Arc<dyn CatalogProvider>> {
         let name = name.into();
-
         let state = self.state.lock();
         let catalog = if state.config.information_schema {
-            let is = state
-                .catalog_list
-                .catalog("datafusion")
-                .unwrap()
-                .schema("information_schema");
-            match is {
-                Some(_) => catalog,
-                None => Arc::new(CatalogWithInformationSchema::new(
-                    Arc::downgrade(&state.catalog_list),
-                    catalog,
-                )),
-            }
+            Arc::new(CatalogWithInformationSchema::new(
+                Arc::downgrade(&state.catalog_list),
+                catalog,
+            ))
         } else {
             catalog
         };
