@@ -97,8 +97,8 @@ impl DedicatedExecutor {
 
         let (tx, rx) = std::sync::mpsc::channel();
 
-        //Cannot create a separated tokio runtime in another tokio runtime,
-        //So use std::thread to spawn a thread
+        // Cannot create a separated tokio runtime in another tokio runtime,
+        // So use std::thread to spawn a thread
         let thread = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
@@ -311,6 +311,8 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
+    // related https://github.com/apache/arrow-datafusion/issues/2140
     async fn executor_shutdown_while_task_running() {
         let barrier = Arc::new(Barrier::new(2));
 
