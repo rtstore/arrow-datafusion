@@ -52,7 +52,7 @@ parse_arg = "0.1.3"
 prost = "0.10"
 prost-types = "0.10"
 serde = { version = "1", features = ["derive"] }
-sqlparser = {git = "https://github.com/piedb-dev/sqlparser-rs.git", rev = "22a6acf"}
+sqlparser = { git = "https://github.com/piedb-dev/sqlparser-rs.git", rev = "22a6acf" }
 tokio = "1.0"
 tonic = "0.7"
 uuid = { version = "0.8", features = ["v4"] }

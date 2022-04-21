@@ -36,7 +36,7 @@ path = "src/lib.rs"
 
 [dependencies]
 ahash = { version = "0.7", default-features = false }
-
-sqlparser = {git = "https://github.com/piedb-dev/sqlparser-rs.git", rev = "22a6acf"}
 arrow = { version = "12", features = ["prettyprint"] }
 datafusion-common = { path = "../common", version = "7.0.0" }
+
+sqlparser = { git = "https://github.com/piedb-dev/sqlparser-rs.git", rev = "22a6acf" }
