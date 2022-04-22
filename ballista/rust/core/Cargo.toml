@@ -55,7 +55,7 @@ serde = { version = "1", features = ["derive"] }
 sqlparser = { git = "https://github.com/piedb-dev/sqlparser-rs.git", rev = "22a6acf" }
 tokio = "1.0"
 tonic = "0.7"
-uuid = { version = "0.8", features = ["v4"] }
+uuid = { version = "1.0", features = ["v4"] }
 walkdir = "2.3.2"
 
 [dev-dependencies]

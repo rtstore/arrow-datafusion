@@ -23,7 +23,7 @@ use crate::datasource::{
     MemTable, TableProvider,
 };
 use crate::error::{DataFusionError, Result};
-use crate::logical_plan::expr_schema::ExprSchemable;
+use crate::logical_expr::ExprSchemable;
 use crate::logical_plan::plan::{
     Aggregate, Analyze, EmptyRelation, Explain, Filter, Join, Projection, Sort,
     SubqueryAlias, TableScan, ToStringifiedPlan, Union, Window,
@@ -43,7 +43,6 @@ use std::{
     sync::Arc,
 };
 
-use super::dfschema::ToDFSchema;
 use super::{exprlist_to_fields, Expr, JoinConstraint, JoinType, LogicalPlan, PlanType};
 use crate::logical_plan::{
     columnize_expr, normalize_col, normalize_cols, provider_as_source,
@@ -51,6 +50,7 @@ use crate::logical_plan::{
     Partitioning, Repartition, Values,
 };
 use crate::sql::utils::group_window_expr_by_sort_keys;
+use datafusion_common::ToDFSchema;
 
 /// Default table name for unnamed table
 pub const UNNAMED_TABLE: &str = "?table?";
