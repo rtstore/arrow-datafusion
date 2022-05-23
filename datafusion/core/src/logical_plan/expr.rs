@@ -20,8 +20,6 @@
 
 pub use super::Operator;
 use crate::error::Result;
-use crate::logical_plan::ExprSchemable;
-use crate::logical_plan::{DFField, DFSchema};
 use arrow::datatypes::DataType;
 pub use datafusion_common::{Column, ExprSchema};
 pub use datafusion_expr::expr_fn::*;
@@ -48,38 +46,6 @@ pub fn combine_filters(filters: &[Expr]) -> Option<Expr> {
         .skip(1)
         .fold(filters[0].clone(), |acc, filter| and(acc, filter.clone()));
     Some(combined_filter)
-}
-
-/// Convert an expression into Column expression if it's already provided as input plan.
-///
-/// For example, it rewrites:
-///
-/// ```text
-/// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-/// .project(vec![col("c1"), sum(col("c2"))?
-/// ```
-///
-/// Into:
-///
-/// ```text
-/// .aggregate(vec![col("c1")], vec![sum(col("c2"))])?
-/// .project(vec![col("c1"), col("SUM(#c2)")?
-/// ```
-pub fn columnize_expr(e: Expr, input_schema: &DFSchema) -> Expr {
-    match e {
-        Expr::Column(_) => e,
-        Expr::Alias(inner_expr, name) => {
-            Expr::Alias(Box::new(columnize_expr(*inner_expr, input_schema)), name)
-        }
-        _ => match e.name(input_schema) {
-            Ok(name) => match input_schema.field_with_unqualified_name(&name) {
-                Ok(field) => Expr::Column(field.qualified_column()),
-                // expression not provided as input, do not convert to a column reference
-                Err(_) => e,
-            },
-            Err(_) => e,
-        },
-    }
 }
 
 /// Recursively un-alias an expressions
@@ -132,14 +98,6 @@ pub fn create_udaf(
         &accumulator,
         &state_type,
     )
-}
-
-/// Create field meta-data from an expression, for use in a result set schema
-pub fn exprlist_to_fields<'a>(
-    expr: impl IntoIterator<Item = &'a Expr>,
-    input_schema: &DFSchema,
-) -> Result<Vec<DFField>> {
-    expr.into_iter().map(|e| e.to_field(input_schema)).collect()
 }
 
 /// Calls a named built in function
