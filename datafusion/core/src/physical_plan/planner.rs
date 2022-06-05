@@ -19,8 +19,8 @@
 
 use super::analyze::AnalyzeExec;
 use super::{
-    aggregates, empty::EmptyExec, expressions::binary, functions,
-    hash_join::PartitionMode, udaf, union::UnionExec, values::ValuesExec, windows,
+    aggregates, empty::EmptyExec, hash_join::PartitionMode, udaf, union::UnionExec,
+    values::ValuesExec, windows,
 };
 use crate::execution::context::{ExecutionProps, SessionState};
 use crate::logical_expr::utils::generate_sort_key;
@@ -29,45 +29,40 @@ use crate::logical_plan::plan::{
     SubqueryAlias, TableScan, Window,
 };
 use crate::logical_plan::{
-    unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan, Operator,
+    unalias, unnormalize_cols, CrossJoin, DFSchema, Expr, LogicalPlan,
     Partitioning as LogicalPartitioning, PlanType, Repartition, ToStringifiedPlan, Union,
     UserDefinedLogicalNode,
 };
 use crate::logical_plan::{Limit, Values};
+use crate::physical_expr::create_physical_expr;
 use crate::physical_optimizer::optimizer::PhysicalOptimizerRule;
 use crate::physical_plan::aggregates::{AggregateExec, AggregateMode};
 use crate::physical_plan::cross_join::CrossJoinExec;
 use crate::physical_plan::explain::ExplainExec;
-use crate::physical_plan::expressions;
-use crate::physical_plan::expressions::{
-    CaseExpr, Column, GetIndexedFieldExpr, Literal, PhysicalSortExpr,
-};
+use crate::physical_plan::expressions::{Column, PhysicalSortExpr};
 use crate::physical_plan::filter::FilterExec;
 use crate::physical_plan::hash_join::HashJoinExec;
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::projection::ProjectionExec;
 use crate::physical_plan::repartition::RepartitionExec;
 use crate::physical_plan::sorts::sort::SortExec;
-use crate::physical_plan::udf;
 use crate::physical_plan::windows::WindowAggExec;
 use crate::physical_plan::{join_utils, Partitioning};
 use crate::physical_plan::{AggregateExpr, ExecutionPlan, PhysicalExpr, WindowExpr};
-use crate::scalar::ScalarValue;
-use crate::sql::utils::window_expr_common_partition_keys;
-use crate::variable::VarType;
 use crate::{
     error::{DataFusionError, Result},
     physical_plan::displayable,
 };
 use arrow::compute::SortOptions;
+use arrow::datatypes::DataType;
 use arrow::datatypes::{Schema, SchemaRef};
-use arrow::{compute::can_cast_types, datatypes::DataType};
 use async_trait::async_trait;
-use datafusion_expr::expr::GroupingSet;
-use datafusion_physical_expr::expressions::DateIntervalExpr;
+use datafusion_expr::{expr::GroupingSet, utils::expr_to_columns};
+use datafusion_sql::utils::window_expr_common_partition_keys;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt, TryStreamExt};
 use log::{debug, trace};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 fn create_function_physical_name(
@@ -388,7 +383,7 @@ impl DefaultPhysicalPlanner {
                     // referred to in the query
                     let filters = unnormalize_cols(filters.iter().cloned());
                     let unaliased: Vec<Expr> = filters.into_iter().map(unalias).collect();
-                    source.scan(projection, &unaliased, *limit).await
+                    source.scan(session_state, projection, &unaliased, *limit).await
                 }
                 LogicalPlan::Values(Values {
                     values,
@@ -755,6 +750,7 @@ impl DefaultPhysicalPlanner {
                     left,
                     right,
                     on: keys,
+                    filter,
                     join_type,
                     null_equals_null,
                     ..
@@ -772,6 +768,65 @@ impl DefaultPhysicalPlanner {
                             ))
                         })
                         .collect::<Result<join_utils::JoinOn>>()?;
+
+                    let join_filter = match filter {
+                        Some(expr) => {
+                            // Extract columns from filter expression
+                            let mut cols = HashSet::new();
+                            expr_to_columns(expr, &mut cols)?;
+
+                            // Collect left & right field indices
+                            let left_field_indices = cols.iter()
+                                .filter_map(|c| match left_df_schema.index_of_column(c) {
+                                    Ok(idx) => Some(idx),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>();
+                            let right_field_indices = cols.iter()
+                                .filter_map(|c| match right_df_schema.index_of_column(c) {
+                                    Ok(idx) => Some(idx),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>();
+
+                            // Collect DFFields and Fields required for intermediate schemas
+                            let (filter_df_fields, filter_fields): (Vec<_>, Vec<_>) = left_field_indices.clone()
+                                .into_iter()
+                                .map(|i| (
+                                    left_df_schema.field(i).clone(),
+                                    physical_left.schema().field(i).clone(),
+                                ))
+                                .chain(
+                                    right_field_indices.clone()
+                                        .into_iter()
+                                        .map(|i| (
+                                            right_df_schema.field(i).clone(),
+                                            physical_right.schema().field(i).clone(),
+                                        ))
+                                )
+                                .unzip();
+
+
+                            // Construct intermediate schemas used for filtering data and
+                            // convert logical expression to physical according to filter schema
+                            let filter_df_schema = DFSchema::new_with_metadata(filter_df_fields, HashMap::new())?;
+                            let filter_schema = Schema::new_with_metadata(filter_fields, HashMap::new());
+                            let filter_expr = create_physical_expr(
+                                expr,
+                                &filter_df_schema,
+                                &filter_schema,
+                                &session_state.execution_props
+                            )?;
+                            let column_indices = join_utils::JoinFilter::build_column_indices(left_field_indices, right_field_indices);
+
+                            Some(join_utils::JoinFilter::new(
+                                filter_expr,
+                                column_indices,
+                                filter_schema
+                            ))
+                        }
+                        _ => None
+                    };
 
                     if session_state.config.target_partitions > 1
                         && session_state.config.repartition_joins
@@ -803,6 +858,7 @@ impl DefaultPhysicalPlanner {
                                 ),
                             )?),
                             join_on,
+                            join_filter,
                             join_type,
                             PartitionMode::Partitioned,
                             null_equals_null,
@@ -812,6 +868,7 @@ impl DefaultPhysicalPlanner {
                             physical_left,
                             physical_right,
                             join_on,
+                            join_filter,
                             join_type,
                             PartitionMode::CollectLeft,
                             null_equals_null,
@@ -943,309 +1000,6 @@ impl DefaultPhysicalPlanner {
             };
             exec_plan
         }.boxed()
-    }
-}
-
-/// Create a physical expression from a logical expression ([Expr])
-pub fn create_physical_expr(
-    e: &Expr,
-    input_dfschema: &DFSchema,
-    input_schema: &Schema,
-    execution_props: &ExecutionProps,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    match e {
-        Expr::Alias(expr, ..) => Ok(create_physical_expr(
-            expr,
-            input_dfschema,
-            input_schema,
-            execution_props,
-        )?),
-        Expr::Column(c) => {
-            let idx = input_dfschema.index_of_column(c)?;
-            Ok(Arc::new(Column::new(&c.name, idx)))
-        }
-        Expr::Literal(value) => Ok(Arc::new(Literal::new(value.clone()))),
-        Expr::ScalarVariable(_, variable_names) => {
-            if &variable_names[0][0..2] == "@@" {
-                match execution_props.get_var_provider(VarType::System) {
-                    Some(provider) => {
-                        let scalar_value = provider.get_value(variable_names.clone())?;
-                        Ok(Arc::new(Literal::new(scalar_value)))
-                    }
-                    _ => Err(DataFusionError::Plan(
-                        "No system variable provider found".to_string(),
-                    )),
-                }
-            } else {
-                match execution_props.get_var_provider(VarType::UserDefined) {
-                    Some(provider) => {
-                        let scalar_value = provider.get_value(variable_names.clone())?;
-                        Ok(Arc::new(Literal::new(scalar_value)))
-                    }
-                    _ => Err(DataFusionError::Plan(
-                        "No user defined variable provider found".to_string(),
-                    )),
-                }
-            }
-        }
-        Expr::BinaryExpr { left, op, right } => {
-            let lhs = create_physical_expr(
-                left,
-                input_dfschema,
-                input_schema,
-                execution_props,
-            )?;
-            let rhs = create_physical_expr(
-                right,
-                input_dfschema,
-                input_schema,
-                execution_props,
-            )?;
-            match (
-                lhs.data_type(input_schema)?,
-                op,
-                rhs.data_type(input_schema)?,
-            ) {
-                (
-                    DataType::Date32 | DataType::Date64,
-                    Operator::Plus | Operator::Minus,
-                    DataType::Interval(_),
-                ) => Ok(Arc::new(DateIntervalExpr::try_new(
-                    lhs,
-                    *op,
-                    rhs,
-                    input_schema,
-                )?)),
-                _ => {
-                    // assume that we can coerce both sides into a common type
-                    // and then perform a binary operation
-                    binary(lhs, *op, rhs, input_schema)
-                }
-            }
-        }
-        Expr::Case {
-            expr,
-            when_then_expr,
-            else_expr,
-            ..
-        } => {
-            let expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = expr {
-                Some(create_physical_expr(
-                    e.as_ref(),
-                    input_dfschema,
-                    input_schema,
-                    execution_props,
-                )?)
-            } else {
-                None
-            };
-            let when_expr = when_then_expr
-                .iter()
-                .map(|(w, _)| {
-                    create_physical_expr(
-                        w.as_ref(),
-                        input_dfschema,
-                        input_schema,
-                        execution_props,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let then_expr = when_then_expr
-                .iter()
-                .map(|(_, t)| {
-                    create_physical_expr(
-                        t.as_ref(),
-                        input_dfschema,
-                        input_schema,
-                        execution_props,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let when_then_expr: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> =
-                when_expr
-                    .iter()
-                    .zip(then_expr.iter())
-                    .map(|(w, t)| (w.clone(), t.clone()))
-                    .collect();
-            let else_expr: Option<Arc<dyn PhysicalExpr>> = if let Some(e) = else_expr {
-                Some(create_physical_expr(
-                    e.as_ref(),
-                    input_dfschema,
-                    input_schema,
-                    execution_props,
-                )?)
-            } else {
-                None
-            };
-            Ok(Arc::new(CaseExpr::try_new(
-                expr,
-                &when_then_expr,
-                else_expr,
-            )?))
-        }
-        Expr::Cast { expr, data_type } => expressions::cast(
-            create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
-            input_schema,
-            data_type.clone(),
-        ),
-        Expr::TryCast { expr, data_type } => expressions::try_cast(
-            create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
-            input_schema,
-            data_type.clone(),
-        ),
-        Expr::Not(expr) => expressions::not(create_physical_expr(
-            expr,
-            input_dfschema,
-            input_schema,
-            execution_props,
-        )?),
-        Expr::Negative(expr) => expressions::negative(
-            create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
-            input_schema,
-        ),
-        Expr::IsNull(expr) => expressions::is_null(create_physical_expr(
-            expr,
-            input_dfschema,
-            input_schema,
-            execution_props,
-        )?),
-        Expr::IsNotNull(expr) => expressions::is_not_null(create_physical_expr(
-            expr,
-            input_dfschema,
-            input_schema,
-            execution_props,
-        )?),
-        Expr::GetIndexedField { expr, key } => Ok(Arc::new(GetIndexedFieldExpr::new(
-            create_physical_expr(expr, input_dfschema, input_schema, execution_props)?,
-            key.clone(),
-        ))),
-
-        Expr::ScalarFunction { fun, args } => {
-            let physical_args = args
-                .iter()
-                .map(|e| {
-                    create_physical_expr(e, input_dfschema, input_schema, execution_props)
-                })
-                .collect::<Result<Vec<_>>>()?;
-            functions::create_physical_expr(
-                fun,
-                &physical_args,
-                input_schema,
-                execution_props,
-            )
-        }
-        Expr::ScalarUDF { fun, args } => {
-            let mut physical_args = vec![];
-            for e in args {
-                physical_args.push(create_physical_expr(
-                    e,
-                    input_dfschema,
-                    input_schema,
-                    execution_props,
-                )?);
-            }
-
-            udf::create_physical_expr(fun.clone().as_ref(), &physical_args, input_schema)
-        }
-        Expr::Between {
-            expr,
-            negated,
-            low,
-            high,
-        } => {
-            let value_expr = create_physical_expr(
-                expr,
-                input_dfschema,
-                input_schema,
-                execution_props,
-            )?;
-            let low_expr =
-                create_physical_expr(low, input_dfschema, input_schema, execution_props)?;
-            let high_expr = create_physical_expr(
-                high,
-                input_dfschema,
-                input_schema,
-                execution_props,
-            )?;
-
-            // rewrite the between into the two binary operators
-            let binary_expr = binary(
-                binary(value_expr.clone(), Operator::GtEq, low_expr, input_schema)?,
-                Operator::And,
-                binary(value_expr.clone(), Operator::LtEq, high_expr, input_schema)?,
-                input_schema,
-            );
-
-            if *negated {
-                expressions::not(binary_expr?)
-            } else {
-                binary_expr
-            }
-        }
-        Expr::InList {
-            expr,
-            list,
-            negated,
-        } => match expr.as_ref() {
-            Expr::Literal(ScalarValue::Utf8(None)) => {
-                Ok(expressions::lit(ScalarValue::Boolean(None)))
-            }
-            _ => {
-                let value_expr = create_physical_expr(
-                    expr,
-                    input_dfschema,
-                    input_schema,
-                    execution_props,
-                )?;
-                let value_expr_data_type = value_expr.data_type(input_schema)?;
-
-                let list_exprs = list
-                    .iter()
-                    .map(|expr| match expr {
-                        Expr::Literal(ScalarValue::Utf8(None)) => create_physical_expr(
-                            expr,
-                            input_dfschema,
-                            input_schema,
-                            execution_props,
-                        ),
-                        _ => {
-                            let list_expr = create_physical_expr(
-                                expr,
-                                input_dfschema,
-                                input_schema,
-                                execution_props,
-                            )?;
-                            let list_expr_data_type =
-                                list_expr.data_type(input_schema)?;
-
-                            if list_expr_data_type == value_expr_data_type {
-                                Ok(list_expr)
-                            } else if can_cast_types(
-                                &list_expr_data_type,
-                                &value_expr_data_type,
-                            ) {
-                                expressions::cast(
-                                    list_expr,
-                                    input_schema,
-                                    value_expr.data_type(input_schema)?,
-                                )
-                            } else {
-                                Err(DataFusionError::Plan(format!(
-                                    "Unsupported CAST from {:?} to {:?}",
-                                    list_expr_data_type, value_expr_data_type
-                                )))
-                            }
-                        }
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-
-                expressions::in_list(value_expr, list_exprs, negated)
-            }
-        },
-        other => Err(DataFusionError::NotImplemented(format!(
-            "Physical plan does not support logical expression {:?}",
-            other
-        ))),
     }
 }
 

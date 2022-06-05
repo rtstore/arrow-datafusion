@@ -227,9 +227,15 @@ impl LogicalPlan {
                 aggr_expr,
                 ..
             }) => group_expr.iter().chain(aggr_expr.iter()).cloned().collect(),
-            LogicalPlan::Join(Join { on, .. }) => on
+            LogicalPlan::Join(Join { on, filter, .. }) => on
                 .iter()
                 .flat_map(|(l, r)| vec![Expr::Column(l.clone()), Expr::Column(r.clone())])
+                .chain(
+                    filter
+                        .as_ref()
+                        .map(|expr| vec![expr.clone()])
+                        .unwrap_or_default(),
+                )
                 .collect(),
             LogicalPlan::Sort(Sort { expr, .. }) => expr.clone(),
             LogicalPlan::Extension(extension) => extension.node.expressions(),
@@ -462,21 +468,20 @@ impl LogicalPlan {
     ///       CsvScan: employee projection=Some([0, 3])
     /// ```
     ///
-    /// ```ignore
+    /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion::logical_plan::{lit, col, LogicalPlanBuilder};
+    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo_csv"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
     /// // Format using display_indent
     /// let display_string = format!("{}", plan.display_indent());
     ///
-    /// assert_eq!("Filter: #foo_csv.id = Int32(5)\
-    ///              \n  TableScan: foo_csv projection=None",
+    /// assert_eq!("Filter: #t1.id = Int32(5)\n  TableScan: t1 projection=None",
     ///             display_string);
     /// ```
     pub fn display_indent(&self) -> impl fmt::Display + '_ {
@@ -503,21 +508,21 @@ impl LogicalPlan {
     ///      TableScan: employee projection=Some([0, 3]) [id:Int32, state:Utf8]";
     /// ```
     ///
-    /// ```ignore
+    /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion::logical_plan::{lit, col, LogicalPlanBuilder};
+    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo_csv"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
     /// // Format using display_indent_schema
     /// let display_string = format!("{}", plan.display_indent_schema());
     ///
-    /// assert_eq!("Filter: #foo_csv.id = Int32(5) [id:Int32]\
-    ///             \n  TableScan: foo_csv projection=None [id:Int32]",
+    /// assert_eq!("Filter: #t1.id = Int32(5) [id:Int32]\
+    ///             \n  TableScan: t1 projection=None [id:Int32]",
     ///             display_string);
     /// ```
     pub fn display_indent_schema(&self) -> impl fmt::Display + '_ {
@@ -543,13 +548,13 @@ impl LogicalPlan {
     /// This currently produces two graphs -- one with the basic
     /// structure, and one with additional details such as schema.
     ///
-    /// ```ignore
+    /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion::logical_plan::{lit, col, LogicalPlanBuilder};
+    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo.csv"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .filter(col("id").eq(lit(5))).unwrap()
     ///     .build().unwrap();
     ///
@@ -602,19 +607,19 @@ impl LogicalPlan {
     /// ```text
     /// Projection: #id
     /// ```
-    /// ```ignore
+    /// ```
     /// use arrow::datatypes::{Field, Schema, DataType};
-    /// use datafusion::logical_plan::{lit, col, LogicalPlanBuilder};
+    /// use datafusion_expr::{lit, col, LogicalPlanBuilder, logical_plan::table_scan};
     /// let schema = Schema::new(vec![
     ///     Field::new("id", DataType::Int32, false),
     /// ]);
-    /// let plan = LogicalPlanBuilder::scan_empty(Some("foo.csv"), &schema, None).unwrap()
+    /// let plan = table_scan(Some("t1"), &schema, None).unwrap()
     ///     .build().unwrap();
     ///
     /// // Format using display
     /// let display_string = format!("{}", plan.display());
     ///
-    /// assert_eq!("TableScan: foo.csv projection=None", display_string);
+    /// assert_eq!("TableScan: t1 projection=None", display_string);
     /// ```
     pub fn display(&self) -> impl fmt::Display + '_ {
         // Boilerplate structure to wrap LogicalPlan with something
@@ -651,10 +656,22 @@ impl LogicalPlan {
                         ref limit,
                         ..
                     }) => {
+                        let projected_fields = match projection {
+                            Some(indices) => {
+                                let schema = source.schema();
+                                let names: Vec<&str> = indices
+                                    .iter()
+                                    .map(|i| schema.field(*i).name().as_str())
+                                    .collect();
+                                format!("Some([{}])", names.join(", "))
+                            }
+                            _ => "None".to_string(),
+                        };
+
                         write!(
                             f,
-                            "TableScan: {} projection={:?}",
-                            table_name, projection
+                            "TableScan: {} projection={}",
+                            table_name, projected_fields
                         )?;
 
                         if !filters.is_empty() {
@@ -744,22 +761,34 @@ impl LogicalPlan {
                     }
                     LogicalPlan::Join(Join {
                         on: ref keys,
+                        filter,
                         join_constraint,
                         join_type,
                         ..
                     }) => {
                         let join_expr: Vec<String> =
                             keys.iter().map(|(l, r)| format!("{} = {}", l, r)).collect();
+                        let filter_expr = filter
+                            .as_ref()
+                            .map(|expr| format!(" Filter: {}", expr))
+                            .unwrap_or_else(|| "".to_string());
                         match join_constraint {
                             JoinConstraint::On => {
-                                write!(f, "{} Join: {}", join_type, join_expr.join(", "))
+                                write!(
+                                    f,
+                                    "{} Join: {}{}",
+                                    join_type,
+                                    join_expr.join(", "),
+                                    filter_expr
+                                )
                             }
                             JoinConstraint::Using => {
                                 write!(
                                     f,
-                                    "{} Join: Using {}",
+                                    "{} Join: Using {}{}",
                                     join_type,
-                                    join_expr.join(", ")
+                                    join_expr.join(", "),
+                                    filter_expr,
                                 )
                             }
                         }
@@ -1052,6 +1081,8 @@ pub struct CreateMemoryTable {
     pub input: Arc<LogicalPlan>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
+    /// Option to replace table content if table already exists
+    pub or_replace: bool,
 }
 
 /// Creates a view.
@@ -1182,6 +1213,8 @@ pub struct Join {
     pub right: Arc<LogicalPlan>,
     /// Equijoin clause expressed as pairs of (left, right) join columns
     pub on: Vec<(Column, Column)>,
+    /// Filters applied during join (non-equi conditions)
+    pub filter: Option<Expr>,
     /// Join type
     pub join_type: JoinType,
     /// Join constraint

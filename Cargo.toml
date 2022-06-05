@@ -22,9 +22,11 @@ members = [
     "datafusion/data-access",
     "datafusion/expr",
     "datafusion/jit",
+    "datafusion/optimizer",
     "datafusion/physical-expr",
     "datafusion/proto",
     "datafusion/row",
+    "datafusion/sql",
     "datafusion-examples",
     "benchmarks",
 ]
@@ -32,4 +34,3 @@ members = [
 [profile.release]
 codegen-units = 1
 lto = true
-

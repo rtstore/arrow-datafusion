@@ -52,11 +52,11 @@
 //!    .to_string();
 //!
 //! let expected = vec![
-//!     "+---+--------------------------+",
-//!     "| a | MIN(tests/example.csv.b) |",
-//!     "+---+--------------------------+",
-//!     "| 1 | 2                        |",
-//!     "+---+--------------------------+"
+//!     "+---+----------------+",
+//!     "| a | MIN(?table?.b) |",
+//!     "+---+----------------+",
+//!     "| 1 | 2              |",
+//!     "+---+----------------+"
 //! ];
 //!
 //! assert_eq!(pretty_results.trim().lines().collect::<Vec<_>>(), expected);
@@ -220,7 +220,6 @@ pub mod prelude;
 pub mod scalar;
 #[cfg(feature = "scheduler")]
 pub mod scheduler;
-pub mod sql;
 pub mod variable;
 
 // re-export dependencies from arrow-rs to minimise version maintenance for crate users
@@ -232,13 +231,14 @@ pub use datafusion_common as common;
 pub use datafusion_data_access;
 pub use datafusion_expr as logical_expr;
 pub use datafusion_physical_expr as physical_expr;
+pub use datafusion_sql as sql;
 
 pub use datafusion_row as row;
 
 #[cfg(feature = "jit")]
 pub use datafusion_jit as jit;
 
-pub mod from_slice;
+pub use physical_expr::from_slice;
 
 #[cfg(test)]
 pub mod test;
