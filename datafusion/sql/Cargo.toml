@@ -42,5 +42,5 @@ arrow = { version = "15.0.0", features = ["prettyprint"] }
 datafusion-common = { path = "../common", version = "8.0.0" }
 datafusion-expr = { path = "../expr", version = "8.0.0" }
 hashbrown = "0.12"
-sqlparser = "0.17"
+sqlparser = { git = "https://github.com/rtstore/sqlparser-rs.git", rev = "41b6d01"}
 tokio = { version = "1.0", features = ["macros", "rt", "rt-multi-thread", "sync", "fs", "parking_lot"] }
