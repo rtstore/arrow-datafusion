@@ -44,4 +44,4 @@ cranelift-module = { version = "0.84.0", optional = true }
 ordered-float = "3.0"
 parquet = { version = "16.0.0", features = ["arrow"], optional = true }
 pyo3 = { version = "0.16", optional = true }
-sqlparser = { git = "https://github.com/rtstore/sqlparser-rs.git", rev = "41b6d01"}
+sqlparser = { git = "https://github.com/rtstore/sqlparser-rs.git", rev = "41b6d01", version="0.17.0"}
