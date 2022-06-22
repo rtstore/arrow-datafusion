@@ -92,6 +92,7 @@ use crate::variable::{VarProvider, VarType};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use datafusion_expr::TableSource;
+use datafusion_optimizer::filter_null_join_keys::FilterNullJoinKeys;
 use datafusion_sql::{
     parser::DFParser,
     planner::{ContextProvider, SqlToRel},
@@ -129,7 +130,7 @@ const DEFAULT_SCHEMA: &str = "public";
 /// let df = ctx.read_csv("tests/example.csv", CsvReadOptions::new()).await?;
 /// let df = df.filter(col("a").lt_eq(col("b")))?
 ///            .aggregate(vec![col("a")], vec![min(col("b"))])?
-///            .limit(100)?;
+///            .limit(None, Some(100))?;
 /// let results = df.collect();
 /// # Ok(())
 /// # }
@@ -1210,6 +1211,7 @@ impl SessionState {
                 Arc::new(CommonSubexprEliminate::new()),
                 Arc::new(EliminateLimit::new()),
                 Arc::new(ProjectionPushDown::new()),
+                Arc::new(FilterNullJoinKeys::default()),
                 Arc::new(FilterPushDown::new()),
                 Arc::new(LimitPushDown::new()),
                 Arc::new(SingleDistinctToGroupBy::new()),
