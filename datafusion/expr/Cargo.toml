@@ -38,3 +38,4 @@ path = "src/lib.rs"
 ahash = { version = "0.7", default-features = false }
 arrow = { version = "16.0.0", features = ["prettyprint"] }
 datafusion-common = { path = "../common", version = "9.0.0" }
+sqlparser = { git = "https://github.com/rtstore/sqlparser-rs.git", rev = "41b6d01"}
