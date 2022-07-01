@@ -4,3 +4,6 @@
 [submodule "testing"]
 	path = testing
 	url = https://github.com/apache/arrow-testing
+[submodule "thirdparty/sqlparser-rs"]
+	path = thirdparty/sqlparser-rs
+	url = https://github.com/rtstore/sqlparser-rs.git

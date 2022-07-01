@@ -30,7 +30,6 @@ members = [
     "datafusion-examples",
     "benchmarks",
 ]
-exclude = ["datafusion-cli"]
 
 [profile.release]
 codegen-units = 1

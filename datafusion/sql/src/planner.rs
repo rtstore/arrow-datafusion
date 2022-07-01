@@ -477,7 +477,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLDataType::BigInt(_) => Ok(DataType::Int64),
             SQLDataType::Int(_) => Ok(DataType::Int32),
             SQLDataType::SmallInt(_) => Ok(DataType::Int16),
-            SQLDataType::Char(_) | SQLDataType::Varchar(_) | SQLDataType::Text => {
+            SQLDataType::Char(_, _) | SQLDataType::Varchar(_) | SQLDataType::Text => {
                 Ok(DataType::Utf8)
             }
             SQLDataType::Decimal(precision, scale) => {
@@ -1762,6 +1762,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             SQLExpr::Cast {
                 expr,
                 data_type,
+                ..
             } => Ok(Expr::Cast {
                 expr: Box::new(self.sql_expr_to_logical_expr(*expr, schema, ctes)?),
                 data_type: convert_data_type(&data_type)?,
@@ -2616,7 +2617,7 @@ pub fn convert_simple_data_type(sql_type: &SQLDataType) -> Result<DataType> {
         SQLDataType::Float(_) => Ok(DataType::Float32),
         SQLDataType::Real => Ok(DataType::Float32),
         SQLDataType::Double => Ok(DataType::Float64),
-        SQLDataType::Char(_)
+        SQLDataType::Char(_, _)
         | SQLDataType::Varchar(_)
         | SQLDataType::Text
         | SQLDataType::String => Ok(DataType::Utf8),
